@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<style>
+    main {
+        display: flex;
+    }
+
+    main>* {
+        flex: 1;
+        border: 1px solid black;
+        margin: 10px;
+        padding: 20px;
+    }
+
+    #form {
+        display: flex;
+        flex-direction: column;
+
+        label {
+            max-width: 400px;
+            display: flex;
+
+            >* {
+                flex: 1;
+            }
+        }
+    }
+
+    #refPath {
+        fill: none;
+        stroke: blue;
+    }
+</style>
+<main>
+    <div id="ref">
+        <svg style="height: 200px; width: 200px">
+            <path id=refPath
+                d="">
+        </svg>
+    </div>
+
+    <div id="target">
+        <canvas id=canvas width="200" height="200"></canvas>
+    </div>
+    <form id=form>
+        <!-- <label><span>SVG Path</span> <textarea id=pathInput width=300
+                rows=10>m 5 0 H 75 Q 100 0 100 10 V 92 Q 100 97 95 97 H 70 l -2 3 l -2 -3 H 5 Q 0 97 0 92 V 5 Q 0 0 5 0</textarea></label> -->
+        <label><span>SVG Path</span> <textarea name=path id=pathInput width=300
+                rows=10>m 80 0 V 80 Q 0 80 0 0 z</textarea></label>
+
+        <label><span>Top</span> <input name=wtop type=number id=topInput value=4><input type="color" name="ctop" id="topColorInput"></label>
+        <label><span>Right</span> <input name=rtop type=number id=rightInput value=3> <input name="cright" type="color"
+                id="rightColorInput"></label>
+        <label><span>Bottom</span> <input name=btop type=number id=bottomInput value=1><input name="cbottom" type="color"
+                id="bottomColorInput"></label>
+        <label><span>Left</span> <input name=ltop type=number id=leftInput value=10> <input name="cleft" type="color"
+                id="leftColorInput"></label>
+    </form>
+</main>
+Note: Curve joins and arcs don't work well yet
+<script>
+function normalizePath(segments) {
+    let cursor = [0, 0];
+    let last_open = [0, 0];
+    function normalizeSegment(segment) {
+        switch (segment.command) {
+            case "h":
+                return normalizeSegment({...segment, command: "H", parts: [cursor[0] + segment.parts[0]]});
+            case "H":
+                return normalizeSegment({...segment, command: "L", parts: [segment.parts[0], cursor[1]]});
+            case "v":
+                return normalizeSegment({...segment, command: "V", parts: [cursor[1] + segment.parts[0]]});
+            case "V":
+                return normalizeSegment({...segment, command: "L", parts: [cursor[0], segment.parts[0]]});
+            case "z":
+            case "Z":
+                return normalizeSegment({...segment, command: "L", parts: [...last_open]});
+            case "l":
+            case "m":
+            case "q":
+            case "c":
+            case "s":
+            case "t":
+                return normalizeSegment({
+                    ...segment,
+                        command: segment.command.toUpperCase(),
+                        parts: segment.parts.map((p, i) =>
+                            p + cursor[i % 2]
+                        )});
+            default:
+                return segment;
+        }
+    }
+
+    return segments.map(s => {
+        const next = normalizeSegment(s);
+        cursor = next.parts.slice(-2);
+        if (next.command === "M")
+            last_open = [...cursor];
+        return next;
+    });
+}
+
+function parallel(p1, p2, distance) {
+    const v = [p2[0] - p1[0], p2[1] - p1[1]];
+    const length = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
+    const u = [v[0] / length, v[1] / length];
+    const w = p1[0] === p2[0] ? [0, 1] : [-u[1], u[0]];
+
+    const p1_new1 = [p1[0] + distance * w[0], p1[1] + distance * w[1]];
+    const p2_new1 = [p2[0] + distance * w[0], p2[1] + distance * w[1]];
+    const p1_new2 = [p1[0] - distance * w[0], p1[1] - distance * w[1]];
+    const p2_new2 = [p2[0] - distance * w[0], p2[1] - distance * w[1]];
+    return [[p1_new1, p1_new2], [p2_new1, p2_new2]];
+ }
+
+ function qbezier(t, x0, y0, x1, y1, controlPoints) {
+    const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * controlPoints[0] + t * t * x1;
+    const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * controlPoints[1] + t * t * y1;
+    return [x, y];
+}
+
+function cbezier(t, x0, y0, x1, y1, controlPoints) {
+    const x = Math.pow(1 - t, 3) * x0 + 3 * Math.pow(1 - t, 2) * t * controlPoints[0] + 3 * (1 - t) * Math.pow(t, 2) * controlPoints[2] + Math.pow(t, 3) * x1;
+    const y = Math.pow(1 - t, 3) * y0 + 3 * Math.pow(1 - t, 2) * t * controlPoints[1] + 3 * (1 - t) * Math.pow(t, 2) * controlPoints[3] + Math.pow(t, 3) * y1;
+    return [x, y];
+}
+
+function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
+  const segments = path.match(/([A-Za-z])(\s*[-\d]+){0,6}/g);
+  const segment_data = normalizePath(segments.map((segment) => {
+    const [command, ...parts] = segment.split(" ").map((p, i) => i ? parseFloat(p) : p);
+    return {command, parts, segment}
+  }));
+
+  segment_data.forEach((segment, i) => {
+    segment.end = segment.parts.slice(-2).map(n => +n);
+  });
+
+  segment_data.splice(0, 1);
+
+
+  function parallelSegments(p1, p2, distance) {
+    if (p1[0] === p2[0]) {
+        return {m: Infinity, b0: p1[0], b1: p1[0] - distance, b2: p1[0] + distance};
+    }
+    const [[p1_new1, p1_new2], [p2_new1, p2_new2]] = parallel(p1, p2, distance);
+    const m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
+    const b0 = p1[1] - m * p1[0];
+    let b1 = p1_new1[1] - m * p1_new1[0];
+    let b2 = p1_new2[1] - m * p1_new2[0];
+    if (p1[0] > p2[0] && p1[1] > p2[1]) {
+        let s = b1;
+        b1 = b2;
+        b2 = s;
+    }
+    return {m, b0, b1, b2};
+}
+
+  function intersection(m0, b0, m1, b1) {
+   const x = m0 === Infinity ? b0 : m1 === Infinity ? b1 : (b1 - b0) / (m0 - m1);
+   const y = m0 === Infinity ? m1 * x + b1 : m0 * x + b0;
+   return [x, y];
+  }
+
+  const strokes = {top: t, right: r, bottom: b, left: l};
+  const colors = {top: tt, right: tr, bottom: tb, left: tl};
+  segment_data.forEach((segment, i) => {
+    segment.next = segment_data[(i + 1) % segment_data.length];
+    segment.prev = segment_data[(i - 1 + segment_data.length) % segment_data.length];
+    segment.end = segment.parts.slice(-2).map(parseFloat);
+  });
+
+  segment_data.forEach((segment, i) => {
+    segment.start = segment.prev.end;
+    const [x0, y0] = segment.start.map(parseFloat);
+    const [x1, y1] = segment.end.map(parseFloat);
+    segment.control = segment.parts.slice(0, -2).map(parseFloat);
+    if (segment.end[0] === segment.start[0]) {
+        segment.side = y1 > y0 ? "right" : "left";
+        segment.sope = Infinity;
+    } else {
+        segment.slope = (segment.end[1] - segment.start[1]) / (segment.end[0] - segment.start[0]);
+        segment.side = Math.abs(segment.slope) >= 1 ?
+                    (y1 > y0 ? "right" : "left") :
+                    (x1 > x0 ? "top" : "bottom");
+    }
+    segment.stroke = Math.max(0, strokes[segment.side]);
+    segment.color = colors[segment.side];
+    segment.halfStroke = segment.stroke / 2;
+    segment.parallels = parallelSegments(segment.start, segment.end, segment.halfStroke);
+  });
+
+  segment_data.forEach(segment => {
+    segment.adjusted_inner_end = intersection(segment.parallels.m, segment.parallels.b1, segment.next.parallels.m, segment.next.parallels.b1);
+    segment.adjusted_outer_end = intersection(segment.parallels.m, segment.parallels.b2, segment.next.parallels.m, segment.next.parallels.b2);
+  });
+
+  return segment_data;
+}
+
+function drawQuad(ctx, a, b, c, d, [x0, y0], [x1, y1], controlPoints, halfStroke) {
+    ctx.beginPath();
+    ctx.moveTo(...a);
+    const outer_lines = [];
+    const inner_lines = [];
+    let cursor = [x0, y0];
+    if (controlPoints.length) {
+        ctx.lineWidth = 1;
+        for (let t = 0.001; t < 1; t += 0.001) {
+            const [x, y] = controlPoints.length === 2 ?
+                qbezier(t, x0, y0, x1, y1, controlPoints) :
+                cbezier(t, x0, y0, x1, y1, controlPoints);
+            const [outer, inner] = parallel(cursor, [x, y], halfStroke);
+            ctx.moveTo(...outer[0]);
+            ctx.lineTo(...inner[1]);
+            inner_lines.push(inner[1]);
+            outer_lines.push(outer[1]);
+            cursor = [x, y];
+        }
+        ctx.stroke();
+        return;
+    } else {
+        ctx.lineTo(...b);
+        ctx.lineTo(...c);
+        ctx.lineTo(...d);
+        ctx.fill();
+    }
+}
+function render() {
+  const path = pathInput.value;
+  refPath.setAttribute("d", path)
+  ref.style.borderLeftWidth = `${leftInput.value}px`;
+  ref.style.borderTopWidth = `${topInput.value}px`;
+  ref.style.borderRightWidth = `${rightInput.value}px`;
+  ref.style.borderBottomWidth = `${bottomInput.value}px`;
+  ref.style.borderLeftColor = leftColorInput.value;
+  ref.style.borderTopColor = topColorInput.value;
+  ref.style.borderRightColor = rightColorInput.value;
+  ref.style.borderBottomColor = bottomColorInput.value;
+  const segments = analyzePath(path,
+    [+topInput.value, +rightInput.value, +bottomInput.value, +leftInput.value],
+    [topColorInput.value, rightColorInput.value, bottomColorInput.value, leftColorInput.value]);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.beginPath();
+  ctx.moveTo(...segments.at(segments.length-1).adjusted_outer_end);
+  segments.forEach(segment => {
+    ctx.fillStyle = ctx.strokeStyle = segment.color;
+    drawQuad(
+        ctx,
+        segment.prev.adjusted_outer_end,
+        segment.adjusted_outer_end,
+        segment.adjusted_inner_end,
+        segment.prev.adjusted_inner_end,
+        segment.start,
+        segment.end,
+        segment.control,
+    segment.halfStroke);
+  });
+}
+
+form.onchange = () => form.submit();
+for (const [name, value] of new URLSearchParams(location.search)) {
+    form.elements[name].value = value;
+}
+render()
+    </script>
