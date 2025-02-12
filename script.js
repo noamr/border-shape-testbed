@@ -103,19 +103,20 @@ function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
     segment_data = segment_data.flatMap((segment, i) => {
         segment.start = cursor;
         cursor = segment.end = segment.parts.slice(-2).map(n => +n);
-        if (segment.command === "C" || segment.command === "Q" && splitCheck.checked) {
+        const split_type = new URLSearchParams(location.search).get("split") || "inflection";
+        if ((segment.command === "C" || segment.command === "Q") && split_type !== "none") {
             const bezier = new Bezier(...segment.start, ...segment.parts.map(parseFloat));
-            const inflections = bezier.inflections();
+            const split_ts = split_type === "inflection" ?  bezier.inflections() : bezier.extrema().values;
             const split = [];
-            if (inflections.length) {
-                if (inflections[0] > 0)
-                    inflections.unshift(0);
-                if (inflections.at(-1) < 1)
-                    inflections.push(1);
+            if (split_ts.length) {
+                if (split_ts[0] > 0)
+                    split_ts.unshift(0);
+                if (split_ts.at(-1) < 1)
+                    split_ts.push(1);
 
-                for (let i = 0; i < inflections.length - 1; ++i) {
-                    const t0 = inflections[i];
-                    const t1 = inflections[i + 1];
+                for (let i = 0; i < split_ts.length - 1; ++i) {
+                    const t0 = split_ts[i];
+                    const t1 = split_ts[i + 1];
                     split.push(bezier.split(t0, t1).points.slice(1).flatMap(({x, y}) => [x, y]));
                 }
 

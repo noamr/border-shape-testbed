@@ -54,7 +54,11 @@
                 id="bottomColorInput"></label>
         <label><span>Left</span> <input name=ltop type=number id=leftInput value=10> <input name="cleft" type="color"
                 id="leftColorInput" value="#668866"></label>
-        <label><span><input type=checkbox name=split id=splitCheck>Split at inflections</span></label>
+        <label><span><select name=split id=splitType>
+            <option value="extrema">extrema</option>
+            <option value="inflection">Inflection</option>
+            <option value="none">No split</option>
+        </select></label>
     </form>
 </main>
 Note: arcs don't work yet
