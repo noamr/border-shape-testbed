@@ -86,13 +86,11 @@ function parallel(p1, p2, distance) {
     ];
 }
 
-function fromBezier(b) {
-    return b.points.map(({x, y}) => [x,y])
-}
+const fromBezier = ({points}) => points.map(({x, y}) => [+x,+y]);
 
 function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
     const segments = path.match(/([A-Za-z])(\s*[-\d]+){0,6}/g);
-    const segment_data = normalizePath(segments.map((segment) => {
+    let segment_data = normalizePath(segments.map((segment) => {
         const [command, ...parts] = segment.split(" ").map((p, i) => i ? parseFloat(p) : p);
         return {
             command,
@@ -101,41 +99,43 @@ function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
         }
     }));
 
-    segment_data.forEach((segment, i) => {
-        segment.end = segment.parts.slice(-2).map(n => +n);
+    let cursor = [0, 0];
+    segment_data = segment_data.flatMap((segment, i) => {
+        segment.start = cursor;
+        cursor = segment.end = segment.parts.slice(-2).map(n => +n);
+        if (segment.command === "C" || segment.command === "Q" && splitCheck.checked) {
+            const bezier = new Bezier(...segment.start, ...segment.parts.map(parseFloat));
+            const inflections = bezier.inflections();
+            const split = [];
+            if (inflections.length) {
+                if (inflections[0] > 0)
+                    inflections.unshift(0);
+                if (inflections.at(-1) < 1)
+                    inflections.push(1);
+
+                for (let i = 0; i < inflections.length - 1; ++i) {
+                    const t0 = inflections[i];
+                    const t1 = inflections[i + 1];
+                    split.push(bezier.split(t0, t1).points.slice(1).flatMap(({x, y}) => [x, y]));
+                }
+
+                console.log(split)
+                return split.map((points, i) => ({
+                    command: "C", start: i ? split[i - 1].end : segment.start,
+                    end: points.slice(-2), parts: points.slice(2)}))
+            }
+        }
+
+        return [segment];
     });
 
     segment_data.splice(0, 1);
 
-    function parallelSegments(p1, p2, distance) {
-        if (p1[0] === p2[0]) {
-            return {
-                m: Infinity,
-                b0: p1[0],
-                b1: p1[0] - distance,
-                b2: p1[0] + distance
-            };
-        }
-        const [
-            [p1_new1, p1_new2],
-            [p2_new1, p2_new2]
-        ] = parallel(p1, p2, distance);
-        const m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
-        const b0 = p1[1] - m * p1[0];
-        let b1 = p1_new1[1] - m * p1_new1[0];
-        let b2 = p2_new2[1] - m * p2_new2[0];
-        return {
-            m,
-            b0,
-            b1,
-            b2
-        };
-    }
-
     function intersection(m0, b0, m1, b1) {
         const x = m0 === Infinity ? b0 : m1 === Infinity ? b1 : (b1 - b0) / (m0 - m1);
         const y = m0 === Infinity ? m1 * x + b1 : m0 * x + b0;
-        return [x, y];
+        console.log({m0, b0, m1, b1, x, y})
+        return [Math.round(x), Math.round(y)];
     }
 
     function slope([x0, y0], [x1, y1]) {
@@ -147,6 +147,9 @@ function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
     function intersect_segments(s0, s1) {
         const m0 = slope(...s0);
         const m1 = slope(...s1);
+        if (Math.abs(m0 - m1) < 0.01 || (m0 === Infinity && m1 === Infinity)) {
+            return [(s1[0][0] + s0[1][0]) / 2, (s1[0][1] + s0[1][1]) / 2];
+        }
         const b0 = m0 === Infinity ? s0[0][0] : s0[0][1] - m0 * s0[0][0];
         const b1 = m1 === Infinity ? s1[0][0] : s1[0][1] - m1 * s1[0][0];
         return intersection(m0, b0, m1, b1)
@@ -177,7 +180,7 @@ function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
         segment.control = segment.parts.slice(0, -2).map(parseFloat);
         if (segment.end[0] === segment.start[0]) {
             segment.side = y1 > y0 ? "right" : "left";
-            segment.sope = Infinity;
+            segment.slope = Infinity;
         } else {
             segment.slope = (segment.end[1] - segment.start[1]) / (segment.end[0] - segment.start[0]);
             segment.side = Math.abs(segment.slope) >= 1 ?
@@ -187,11 +190,8 @@ function analyzePath(path, [t, r, b, l], [tt, tr, tb, tl]) {
         segment.stroke = Math.max(0, strokes[segment.side]);
         segment.color = colors[segment.side];
         segment.halfStroke = segment.stroke / 2;
-        segment.parallel_mid = parallelSegments(segment.start, segment.end, segment.halfStroke);
         if (segment.control.length) {
             segment.bezier = new Bezier(x0, y0, ...segment.control, x1, y1);
-            segment.tan_start_slope = (segment.control[1] - segment.start[1]) / (segment.control[0] - segment.start[0]);
-            segment.tan_end_slope = (segment.end[1] - segment.control.at(-1)) / (segment.end[0] - segment.control.at(-2));
             segment.outline_inner = segment.bezier.offset(segment.halfStroke).map(fromBezier);
             segment.outline_outer = segment.bezier.offset(-segment.halfStroke).map(fromBezier);
         } else {
@@ -232,13 +232,14 @@ function render() {
     ctx.beginPath();
     ctx.moveTo(...segments.at(segments.length - 1).adjusted_outer_end);
     segments.forEach((segment, i) => {
+        console.log(segment)
         ctx.fillStyle = segment.color;
         ctx.beginPath();
         ctx.moveTo(...segment.prev.adjusted_outer_end);
         segment.outline_outer[0][0] = segment.prev.adjusted_outer_end;
         segment.outline_inner[0][0] = segment.prev.adjusted_inner_end;
         segment.outline_outer.at(-1).splice(-1, 1, segment.adjusted_outer_end);
-        segment.outline_inner.at(-1).splice(-1, 1, segment. adjusted_inner_end);
+        segment.outline_inner.at(-1).splice(-1, 1, segment.adjusted_inner_end);
         if (segment.command === "L")
             ctx.lineTo(...segment.adjusted_outer_end);
         else {
@@ -268,5 +269,6 @@ function render() {
 form.onchange = () => form.submit();
 for (const [name, value] of new URLSearchParams(location.search)) {
     form.elements[name].value = value;
+    form.elements[name].checked = value === "on";
 }
 render()

@@ -45,7 +45,7 @@
         <!-- <label><span>SVG Path</span> <textarea id=pathInput width=300
                 rows=10>m 5 0 H 75 Q 100 0 100 10 V 92 Q 100 97 95 97 H 70 l -2 3 l -2 -3 H 5 Q 0 97 0 92 V 5 Q 0 0 5 0</textarea></label> -->
         <label><span>SVG Path</span> <textarea name=path id=pathInput width=300
-                rows=10>m 180 0 V 180 C 10 200 130 40 10 0 z</textarea></label>
+                rows=10>m 20 20 l 150 20 V 150 C 100 -20 120 130 30 180 z</textarea></label>
 
         <label><span>Top</span> <input name=wtop type=number id=topInput value=4><input type="color" name="ctop" id="topColorInput"></label>
         <label><span>Right</span> <input name=rtop type=number id=rightInput value=3> <input name="cright" type="color"
@@ -54,6 +54,7 @@
                 id="bottomColorInput"></label>
         <label><span>Left</span> <input name=ltop type=number id=leftInput value=10> <input name="cleft" type="color"
                 id="leftColorInput" value="#668866"></label>
+        <label><span><input type=checkbox name=split id=splitCheck>Split at inflections</span></label>
     </form>
 </main>
 Note: arcs don't work yet
